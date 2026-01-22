@@ -15,18 +15,24 @@ struct GameView: View {
 
     @State private var isDragging: Bool = false
     @State private var fingerGlobal: CGPoint = .zero
+    @State private var smoothedFingerGlobal: CGPoint = .zero
+    @State private var lastHoverOrigin: (row: Int, col: Int)? = nil
+    @State private var lastFingerTimestamp: TimeInterval = 0
+    @State private var lastFingerPoint: CGPoint = .zero
 
     private let bottomGapPx: CGFloat = 100
+    private let ghostFingerOffsetY: CGFloat = 60
+    private let ghostFingerOffsetX: CGFloat = 40
 
     private let ghostCellSize: CGFloat = 28
     private let ghostSpacing: CGFloat = 0
 
     private let currentCellSize: CGFloat = 24
-    private let currentSpacing: CGFloat = 3
+    private let currentSpacing: CGFloat = 1
     private let currentCardPadding: CGFloat = 12
 
     private let nextCellSize: CGFloat = 10
-    private let nextSpacing: CGFloat = 2
+    private let nextSpacing: CGFloat = 1
     private let nextCardPadding: CGFloat = 8
 
     private var boardSide: CGFloat { min(boardRectGlobal.width, boardRectGlobal.height) }
@@ -51,13 +57,22 @@ struct GameView: View {
         )
     }
 
+    // Convert a global finger point into fractional board coordinates (colF, rowF)
+    private func fractionalBoardCoordinate(from globalPoint: CGPoint) -> CGPoint? {
+        guard boardRectGlobal != .zero, boardCell > 2 else { return nil }
+        let localX = globalPoint.x - boardRectGlobal.minX - ghostFingerOffsetX
+        let localY = globalPoint.y - boardRectGlobal.minY - bottomGapPx - ghostFingerOffsetY
+        let colF = localX / boardCell
+        let rowF = localY / boardCell
+        return CGPoint(x: colF, y: rowF)
+    }
+
     var body: some View {
         ZStack {
             mainLayout
             ghostLayer
         }
         .padding()
-        // SCORE/TOP pinned at top (won’t get pushed away by GeometryReader)
         .overlay(alignment: .top) {
             scoreHeader
                 .padding(.top, 6)
@@ -74,8 +89,6 @@ struct GameView: View {
         }
     }
 
-    // MARK: - Header pinned at top
-
     private var scoreHeader: some View {
         HStack {
             Text("Score: \(vm.score)")
@@ -87,26 +100,22 @@ struct GameView: View {
         .foregroundColor(.white)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        // tiny background so it’s always readable but still minimal
         .background(Color.black.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, 6)
     }
 
-    // MARK: - Main layout
-
     private var mainLayout: some View {
         VStack(spacing: 14) {
-
-            // (header removed from here!)
 
             BoardView(
                 board: vm.board,
                 hoverCells: vm.hoverCells,
                 hoverIsValid: vm.hoverIsValid,
-                onCellTap: { row, col in
-                    vm.updateHover(row: row, col: col)
-                }
+                helperCells: vm.helperCells,
+                clearingCells: vm.clearingCells,
+                showGridHover: true,
+                onCellTap: { row, col in vm.updateHover(row: row, col: col) }
             )
             .padding(.horizontal, 10)
             .overlay(
@@ -121,38 +130,58 @@ struct GameView: View {
             .overlay {
                 if vm.isGameOver {
                     ZStack {
-                        Color.black.opacity(0.45)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        GeometryReader { geo in
+                            let side = min(geo.size.width, geo.size.height)
+                            let cardWidth = side * 0.78
+                            let cardHeight = side * 0.48
 
-                        VStack(spacing: 10) {
-                            Text("Game Over")
-                                .font(.title.bold())
-                                .foregroundStyle(.white)
+                            VStack(spacing: 12) {
+                                Text("Game Over")
+                                    .font(.title.bold())
+                                    .foregroundStyle(.white)
 
-                            Text("Score: \(vm.score)")
-                                .font(.headline)
-                                .foregroundStyle(.white.opacity(0.95))
+                                Text("Score: \(vm.score)")
+                                    .font(.headline)
+                                    .foregroundStyle(.white.opacity(0.95))
 
-                            Text("Top: \(vm.topScore)")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.8))
+                                Text("Top: \(vm.topScore)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
+                            .frame(width: cardWidth, height: cardHeight)
+                            .background(Color.black.opacity(0.2))
+                            .background(.ultraThinMaterial.opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.25), radius: 14, x: 0, y: 10)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                            .scaleEffect(vm.isGameOver ? 1.0 : 0.85)
+                            .opacity(vm.isGameOver ? 1.0 : 0.0)
+                            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: vm.isGameOver)
                         }
-                        .padding()
                     }
-                    .padding(.horizontal, 12)
                 }
             }
+            .animation(.easeInOut(duration: 0.28), value: vm.isGameOver)
 
             VStack(spacing: 10) {
                 Text("Current")
                     .font(.headline)
                     .frame(maxWidth: .infinity, alignment: .center)
 
-                ZStack {
-                    PieceView(piece: vm.currentPiece, cellSize: currentCellSize, spacing: currentSpacing)
-                        .opacity(isDragging ? 0.25 : 1.0)
+                // ✅ SAME AS YOUR WORKING VERSION: ZStack + fixed frame => centers PieceView
+                ZStack(alignment: .center) {
+                    PieceView(
+                        piece: vm.currentPiece,
+                        cellSize: currentCellSize,
+                        spacing: currentSpacing,
+                        color: GameColors.filled, canvasSize: 4
+                    )
                 }
-                .frame(width: currentCardSize.width, height: currentCardSize.height)
+                .frame(width: currentCardSize.width, height: currentCardSize.height, alignment: .center)
                 .background(Color.gray.opacity(0.12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
@@ -168,10 +197,10 @@ struct GameView: View {
                     .padding(.top, 2)
 
                 HStack(spacing: 12) {
-                    ZStack {
-                        PieceView(piece: vm.next1, cellSize: nextCellSize, spacing: nextSpacing)
+                    ZStack(alignment: .center) {
+                        PieceView(piece: vm.next1, cellSize: nextCellSize, spacing: nextSpacing, color: GameColors.filled, canvasSize: 4)
                     }
-                    .frame(width: nextCardSize.width, height: nextCardSize.height)
+                    .frame(width: nextCardSize.width, height: nextCardSize.height, alignment: .center)
                     .background(Color.gray.opacity(0.10))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
@@ -179,10 +208,10 @@ struct GameView: View {
                     )
                     .cornerRadius(12)
 
-                    ZStack {
-                        PieceView(piece: vm.next2, cellSize: nextCellSize, spacing: nextSpacing)
+                    ZStack(alignment: .center) {
+                        PieceView(piece: vm.next2, cellSize: nextCellSize, spacing: nextSpacing, color: GameColors.filled, canvasSize: 4)
                     }
-                    .frame(width: nextCardSize.width, height: nextCardSize.height)
+                    .frame(width: nextCardSize.width, height: nextCardSize.height, alignment: .center)
                     .background(Color.gray.opacity(0.10))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
@@ -195,9 +224,7 @@ struct GameView: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 12) {
-                Button {
-                    vm.start()
-                } label: {
+                Button { vm.start() } label: {
                     Text("Start")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -205,9 +232,7 @@ struct GameView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(vm.isStarted && !vm.isGameOver)
 
-                Button {
-                    vm.restart()
-                } label: {
+                Button { vm.restart() } label: {
                     Text("Restart")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -217,7 +242,6 @@ struct GameView: View {
             .padding(.horizontal)
             .padding(.bottom, 6)
         }
-        // give some breathing room so pinned header doesn’t overlap board too much
         .padding(.top, 34)
     }
 
@@ -225,77 +249,88 @@ struct GameView: View {
 
     private var ghostLayer: some View {
         Group {
-            if isDragging, rootRectGlobal != .zero {
-                let pieceH = GhostPositioning.piecePixelSize(
-                    piece: vm.currentPiece,
-                    cellSize: ghostCellSize,
-                    spacing: ghostSpacing
-                ).height
+            if isDragging, rootRectGlobal != .zero, boardCell > 0 {
+                
 
-                let ghostCenterGlobal = CGPoint(
-                    x: fingerGlobal.x,
-                    y: fingerGlobal.y - bottomGapPx - (pieceH / 2)
-                )
+                if let frac = fractionalBoardCoordinate(from: fingerGlobal) {
+                    let pixelX = frac.x * boardCell + boardRectGlobal.minX
+                    let pixelY = frac.y * boardCell + boardRectGlobal.minY + bottomGapPx
+                    let ghostCenterGlobal = CGPoint(
+                        x: pixelX,
+                        y: pixelY
+                    )
+                    let ghostCenterLocal = CGPoint(
+                        x: ghostCenterGlobal.x - rootRectGlobal.minX,
+                        y: ghostCenterGlobal.y - rootRectGlobal.minY
+                    )
 
-                let ghostCenterLocal = CGPoint(
-                    x: ghostCenterGlobal.x - rootRectGlobal.minX,
-                    y: ghostCenterGlobal.y - rootRectGlobal.minY
-                )
-
-                PieceView(piece: vm.currentPiece, cellSize: ghostCellSize, spacing: ghostSpacing)
+                    PieceView(
+                        piece: vm.currentPiece,
+                        cellSize: ghostCellSize,
+                        spacing: ghostSpacing,
+                        color: (vm.hoverIsValid ? Color.green : Color.red)
+                    )
+                    .scaleEffect(1.05)
                     .position(ghostCenterLocal)
                     .zIndex(100)
+                }
             }
         }
         .allowsHitTesting(false)
     }
 
-    // MARK: - Drag Gesture (GLOBAL, hover from dropPoint)
+    // MARK: - Drag Gesture
 
     private var dragGestureGlobal: some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
-                guard vm.isStarted, !vm.isGameOver else { return }
+                guard vm.isStarted, !vm.isGameOver, !vm.isAnimatingClear else { return }
 
+                let raw = value.location
+                fingerGlobal = raw
                 isDragging = true
-                fingerGlobal = value.location
 
-                guard boardRectGlobal != .zero, boardCell > 2 else {
+                guard let frac = fractionalBoardCoordinate(from: raw) else {
                     vm.clearHover()
+                    lastHoverOrigin = nil
                     return
                 }
 
-                let dropPoint = CGPoint(x: fingerGlobal.x, y: fingerGlobal.y - bottomGapPx)
+                // Candidate origin based on fractional position
+                let candCol = Int(floor(frac.x))
+                let candRow = Int(floor(frac.y))
 
-                if let origin = GhostPositioning.originCell(
-                    dropPoint: dropPoint,
-                    boardRect: boardRectGlobal,
-                    boardCell: boardCell,
-                    piece: vm.currentPiece
-                ) {
-                    vm.updateHover(row: origin.row, col: origin.col)
+                if candRow >= 0 && candRow < Board.size && candCol >= 0 && candCol < Board.size {
+                    if lastHoverOrigin?.row != candRow || lastHoverOrigin?.col != candCol {
+                        vm.updateHover(row: candRow, col: candCol)
+                        lastHoverOrigin = (row: candRow, col: candCol)
+                    }
                 } else {
                     vm.clearHover()
+                    lastHoverOrigin = nil
                 }
             }
             .onEnded { _ in
-                guard vm.isStarted, !vm.isGameOver else {
+                guard vm.isStarted, !vm.isGameOver, !vm.isAnimatingClear else {
                     isDragging = false
+                    lastHoverOrigin = nil
                     vm.clearHover()
                     return
                 }
 
+                lastHoverOrigin = nil
+                lastFingerTimestamp = 0
+                lastFingerPoint = .zero
                 isDragging = false
 
                 if vm.hoverIsValid {
                     _ = vm.commitHover()
                 } else {
                     vm.clearHover()
+                    lastHoverOrigin = nil
                 }
             }
     }
-
-    // MARK: - Sizing helper (max of all oriented shapes)
 
     private func maxPiecePixelSize(cellSize: CGFloat, spacing: CGFloat) -> CGSize {
         var maxW: CGFloat = 0
@@ -313,8 +348,6 @@ struct GameView: View {
     }
 }
 
-// MARK: - Preference keys
-
 private struct RootRectGlobalKey: PreferenceKey {
     static var defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
@@ -324,3 +357,4 @@ private struct BoardRectGlobalKey: PreferenceKey {
     static var defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
+

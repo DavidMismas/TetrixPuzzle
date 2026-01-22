@@ -14,8 +14,18 @@ struct BoardView: View {
     let hoverCells: Set<Int>
     let hoverIsValid: Bool
 
-    // DEBUG: optional callback (if nil, no tap handling)
+    // helper highlight (rows that will clear)
+    let helperCells: Set<Int>
+
+    // clearing flash animation cells
+    let clearingCells: Set<Int>
+    
+    let showGridHover: Bool
+
     var onCellTap: ((Int, Int) -> Void)? = nil
+    
+   
+
 
     var body: some View {
         GeometryReader { geo in
@@ -29,35 +39,34 @@ struct BoardView: View {
                 ForEach(0..<Board.size * Board.size, id: \.self) { index in
                     let filled = board.cells[index]
                     let isHover = hoverCells.contains(index)
+                    let isHelper = helperCells.contains(index)
+                    let isClearing = clearingCells.contains(index)
 
-                    let row = index / Board.size
-                    let col = index % Board.size
+                    
+                    
+                 
 
                     Rectangle()
-                        .fill(filled ? Color.blue : Color.gray.opacity(0.12))
-                        .overlay(
-                            Rectangle().stroke(Color.black.opacity(0.35), lineWidth: 0.8)
-                        )
-                        .overlay(
-                            Group {
-                                if isHover {
-                                    Rectangle()
-                                        .fill((hoverIsValid ? Color.green : Color.red).opacity(0.35))
-                                }
-                            }
-                        )
+                        .fill(filled ? GameColors.filled : GameColors.empty)
+                        .overlay { if isHelper { Rectangle().fill(GameColors.helperRow) } }
+                        .overlay { if showGridHover && isHover { Rectangle().fill(hoverIsValid ? GameColors.hoverValid : GameColors.hoverInvalid) } }
+                        .overlay { if isClearing { Rectangle().fill(GameColors.clearFlash) } }
+                        .overlay( Rectangle().stroke(GameColors.gridStroke, lineWidth: 0.8) )
                         .frame(width: cellSize, height: cellSize)
+                        .scaleEffect(isClearing ? 1.06 : 1.0)
+                        .animation(.easeInOut(duration: 0.14), value: isClearing)
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            onCellTap?(row, col)
-                        }
+                    
+                        
+
                 }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.black.opacity(0.6), lineWidth: 1.5)
+                    .stroke(Color.blue.opacity(0.5), lineWidth: 3)
             )
         }
         .aspectRatio(1, contentMode: .fit)
     }
 }
+

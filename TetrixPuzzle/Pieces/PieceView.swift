@@ -11,49 +11,73 @@ struct PieceView: View {
     let piece: Piece
     let cellSize: CGFloat
     let spacing: CGFloat
+    var color: Color = GameColors.filled
+
+    /// Use for Current/Next cards: 4 makes pieces visually centered consistently.
+    /// Leave nil for ghost/other uses if you want original tight bounding box.
+    var canvasSize: Int? = nil
+
+    private var normalizedCells: [(row: Int, col: Int)] {
+        let minRow = piece.cells.map(\.row).min() ?? 0
+        let minCol = piece.cells.map(\.col).min() ?? 0
+        return piece.cells.map { (row: $0.row - minRow, col: $0.col - minCol) }
+    }
+
+    private var dims: (rows: Int, cols: Int) {
+        let maxRow = normalizedCells.map(\.row).max() ?? 0
+        let maxCol = normalizedCells.map(\.col).max() ?? 0
+        return (rows: maxRow + 1, cols: maxCol + 1)
+    }
+
+    private func pixelSize(rows: Int, cols: Int) -> CGSize {
+        let w = CGFloat(cols) * cellSize + CGFloat(max(0, cols - 1)) * spacing
+        let h = CGFloat(rows) * cellSize + CGFloat(max(0, rows - 1)) * spacing
+        return CGSize(width: w, height: h)
+    }
 
     var body: some View {
-        let cells = normalize(piece.cells)
-        let bounds = boundingBox(cells)
+        let rows = dims.rows
+        let cols = dims.cols
 
-        LazyVGrid(
-            columns: Array(
-                repeating: GridItem(.fixed(cellSize), spacing: spacing),
-                count: bounds.width
-            ),
-            spacing: spacing
-        ) {
-            ForEach(0..<bounds.width * bounds.height, id: \.self) { index in
-                let row = index / bounds.width
-                let col = index % bounds.width
+        // Inner content (tight bounding box)
+        let content = ZStack(alignment: .topLeading) {
+            ForEach(Array(normalizedCells.enumerated()), id: \.offset) { _, cell in
+                RoundedRectangle(cornerRadius: max(2, cellSize * 0.1), style: .continuous)
+                    .fill(color)
+                    .frame(width: cellSize, height: cellSize)
+                    .shadow(color: .black.opacity(0.1), radius: 0.2, x: 0, y: 1)
+                    .offset(
+                        x: CGFloat(cell.col) * (cellSize + spacing),
+                        y: CGFloat(cell.row) * (cellSize + spacing)
+                    )
 
-                if cells.contains(where: { $0.row == row && $0.col == col }) {
-                    RoundedRectangle(cornerRadius: max(3, cellSize * 0.18))
-                        .fill(Color.blue)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: max(3, cellSize * 0.18))
-                                .stroke(Color.black.opacity(0.35), lineWidth: max(1, cellSize * 0.06))
-                        )
-                        .frame(width: cellSize, height: cellSize)
-                } else {
-                    Color.clear
-                        .frame(width: cellSize, height: cellSize)
-                }
             }
         }
-    }
+        .frame(
+            width: pixelSize(rows: rows, cols: cols).width,
+            height: pixelSize(rows: rows, cols: cols).height,
+            alignment: .topLeading
+        )
 
-    // MARK: - Helpers
+        // If no canvas => return tight content (as before)
+        guard let n = canvasSize else {
+            return AnyView(content)
+        }
 
-    private func normalize(_ cells: [(row: Int, col: Int)]) -> [(row: Int, col: Int)] {
-        let minRow = cells.map(\.row).min() ?? 0
-        let minCol = cells.map(\.col).min() ?? 0
-        return cells.map { (row: $0.row - minRow, col: $0.col - minCol) }
-    }
+        // Canvas pixel size (NxN)
+        let canvas = pixelSize(rows: n, cols: n)
+        let contentSize = pixelSize(rows: rows, cols: cols)
 
-    private func boundingBox(_ cells: [(row: Int, col: Int)]) -> (width: Int, height: Int) {
-        let maxRow = cells.map(\.row).max() ?? 0
-        let maxCol = cells.map(\.col).max() ?? 0
-        return (width: maxCol + 1, height: maxRow + 1)
+        // Fractional centering (THIS is the fix)
+        let dx = (canvas.width - contentSize.width) / 2
+        let dy = (canvas.height - contentSize.height) / 2
+
+        return AnyView(
+            ZStack(alignment: .topLeading) {
+                content
+                    .offset(x: dx, y: dy)
+            }
+            .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+        )
     }
 }

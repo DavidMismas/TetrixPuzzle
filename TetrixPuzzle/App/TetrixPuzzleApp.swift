@@ -12,6 +12,7 @@ struct TetrixPuzzleApp: App {
     var body: some Scene {
         WindowGroup {
             GameView()
+                .preferredColorScheme(.light) // <-- always light mode
         }
     }
 }

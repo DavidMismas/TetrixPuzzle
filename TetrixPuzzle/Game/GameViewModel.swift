@@ -31,18 +31,26 @@ final class GameViewModel: ObservableObject {
     @Published var hoverCells: Set<Int> = []
     @Published var hoverIsValid: Bool = false
 
+    // NEW: helper highlight — cells in rows that would clear if we drop now
+    @Published var helperCells: Set<Int> = []
+
+    // NEW: clearing flash animation cells
+    @Published var clearingCells: Set<Int> = []
+
+    // NEW: block interaction during clear animation
+    @Published private(set) var isAnimatingClear: Bool = false
+
     // internal hover origin used for placement
     private var hoverOrigin: (row: Int, col: Int)? = nil
 
     init() {
-        // load saved top score
         topScore = UserDefaults.standard.integer(forKey: topScoreKey)
 
-        // NEW: ne startamo avtomatsko, da Start gumb ima smisel
         pieceBag.reset()
         currentPiece = pieceBag.nextPiece()
         next1 = pieceBag.nextPiece()
         next2 = pieceBag.nextPiece()
+
         clearHover()
         score = 0
         isGameOver = false
@@ -66,19 +74,18 @@ final class GameViewModel: ObservableObject {
         board = Board()
         score = 0
         isGameOver = false
+        isAnimatingClear = false
+        clearingCells = []
+        helperCells = []
 
         pieceBag.reset()
-
         currentPiece = pieceBag.nextPiece()
         next1 = pieceBag.nextPiece()
         next2 = pieceBag.nextPiece()
 
         clearHover()
 
-        // if current cannot be placed anywhere right after start => game over
         isGameOver = !canPlaceAnywhere(piece: currentPiece)
-
-        // top score stays (do not reset)
         persistTopScoreIfNeeded()
     }
 
@@ -91,7 +98,7 @@ final class GameViewModel: ObservableObject {
     // MARK: - Hover
 
     func updateHover(row: Int, col: Int) {
-        guard isStarted, !isGameOver else { return }
+        guard isStarted, !isGameOver, !isAnimatingClear else { return }
         hoverOrigin = (row, col)
         recalcHover()
     }
@@ -100,6 +107,7 @@ final class GameViewModel: ObservableObject {
         hoverOrigin = nil
         hoverCells = []
         hoverIsValid = false
+        helperCells = []
     }
 
     func peekHoverOrigin() -> (row: Int, col: Int)? {
@@ -110,33 +118,59 @@ final class GameViewModel: ObservableObject {
 
     @discardableResult
     func commitHover() -> Bool {
-        guard isStarted, !isGameOver else { return false }
+        guard isStarted, !isGameOver, !isAnimatingClear else { return false }
         guard let origin = hoverOrigin else { return false }
 
         if canPlace(piece: currentPiece, originRow: origin.row, originCol: origin.col) {
+
+            // Place immediately (so we can detect full rows exactly)
             place(piece: currentPiece, originRow: origin.row, originCol: origin.col)
 
-            let cleared = board.clearFullRows()
-            if cleared > 0 {
-                // 1 vrstica = 10
-                score += cleared * 10
-            }
+            // Determine full rows after placement (for animation)
+            let fullRows = currentFullRows()
+            if !fullRows.isEmpty {
+                isAnimatingClear = true
+                clearingCells = indicesForRows(fullRows)
 
-            // update + persist top score
-            persistTopScoreIfNeeded()
+                // keep helper off during clear
+                helperCells = []
 
-            advanceQueue()
-            clearHover()
+                // Flash duration then clear
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
+                    guard let self else { return }
 
-            // game over: current ne paše nikamor
-            isGameOver = !canPlaceAnywhere(piece: currentPiece)
+                    let cleared = self.board.clearFullRows()
+                    if cleared > 0 {
+                        // 1 vrstica = 10
+                        self.score += cleared * 10
+                    }
 
-            // če se konča igra, še enkrat poskrbimo da je top score shranjen
-            if isGameOver {
+                    self.persistTopScoreIfNeeded()
+
+                    self.clearingCells = []
+                    self.isAnimatingClear = false
+
+                    self.advanceQueue()
+                    self.clearHover()
+
+                    self.isGameOver = !self.canPlaceAnywhere(piece: self.currentPiece)
+                    if self.isGameOver {
+                        self.persistTopScoreIfNeeded()
+                    }
+                }
+
+                return true
+            } else {
+                // no rows cleared -> proceed normally
                 persistTopScoreIfNeeded()
-            }
+                advanceQueue()
+                clearHover()
 
-            return true
+                isGameOver = !canPlaceAnywhere(piece: currentPiece)
+                if isGameOver { persistTopScoreIfNeeded() }
+
+                return true
+            }
         } else {
             clearHover()
             return false
@@ -158,6 +192,7 @@ final class GameViewModel: ObservableObject {
         guard let origin = hoverOrigin else {
             hoverCells = []
             hoverIsValid = false
+            helperCells = []
             return
         }
 
@@ -175,6 +210,51 @@ final class GameViewModel: ObservableObject {
 
         hoverCells = indices
         hoverIsValid = valid && absCells.allSatisfy { board.isInside(row: $0.0, col: $0.1) }
+
+        // Helper: if hover valid, show which rows would clear (yellow)
+        if hoverIsValid {
+            helperCells = helperCellsForPotentialClear(withHoverIndices: indices)
+        } else {
+            helperCells = []
+        }
+    }
+
+    private func helperCellsForPotentialClear(withHoverIndices hover: Set<Int>) -> Set<Int> {
+        var rowsToHighlight: [Int] = []
+
+        for row in 0..<Board.size {
+            var full = true
+            for col in 0..<Board.size {
+                let idx = board.index(row: row, col: col)
+                let occupiedAfter = board.cells[idx] || hover.contains(idx)
+                if !occupiedAfter { full = false; break }
+            }
+            if full { rowsToHighlight.append(row) }
+        }
+
+        guard !rowsToHighlight.isEmpty else { return [] }
+        return indicesForRows(rowsToHighlight)
+    }
+
+    private func currentFullRows() -> [Int] {
+        var rows: [Int] = []
+        for row in 0..<Board.size {
+            let full = (0..<Board.size).allSatisfy { col in
+                board.isOccupied(row: row, col: col)
+            }
+            if full { rows.append(row) }
+        }
+        return rows
+    }
+
+    private func indicesForRows(_ rows: [Int]) -> Set<Int> {
+        var set: Set<Int> = []
+        for row in rows {
+            for col in 0..<Board.size {
+                set.insert(board.index(row: row, col: col))
+            }
+        }
+        return set
     }
 
     private func absoluteCells(of piece: Piece, originRow: Int, originCol: Int) -> [(Int, Int)] {
@@ -204,3 +284,4 @@ final class GameViewModel: ObservableObject {
         return false
     }
 }
+
