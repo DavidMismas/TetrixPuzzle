@@ -7,6 +7,9 @@
 
 import Foundation
 import Combine
+import SwiftUI
+import UIKit
+import AudioToolbox
 
 @MainActor
 final class GameViewModel: ObservableObject {
@@ -23,25 +26,23 @@ final class GameViewModel: ObservableObject {
     @Published var isGameOver: Bool = false
     @Published var isStarted: Bool = false
 
-    // TOP SCORE (persisted)
     @Published private(set) var topScore: Int = 0
     private let topScoreKey = "tetrispuzzle.topScore"
 
-    // hover preview (board overlay)
     @Published var hoverCells: Set<Int> = []
     @Published var hoverIsValid: Bool = false
 
-    // NEW: helper highlight — cells in rows that would clear if we drop now
     @Published var helperCells: Set<Int> = []
-
-    // NEW: clearing flash animation cells
     @Published var clearingCells: Set<Int> = []
 
-    // NEW: block interaction during clear animation
     @Published private(set) var isAnimatingClear: Bool = false
 
-    // internal hover origin used for placement
     private var hoverOrigin: (row: Int, col: Int)? = nil
+
+    @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
+    @AppStorage("tetrispuzzle.setting.clearColumnsEnabled") private var clearColumnsEnabled: Bool = true
+    @AppStorage("tetrispuzzle.setting.soundsEnabled") private var soundsEnabled: Bool = true
+    @AppStorage("tetrispuzzle.setting.hapticsEnabled") private var hapticsEnabled: Bool = true
 
     init() {
         topScore = UserDefaults.standard.integer(forKey: topScoreKey)
@@ -56,8 +57,6 @@ final class GameViewModel: ObservableObject {
         isGameOver = false
         isStarted = false
     }
-
-    // MARK: - Start / Restart
 
     func start() {
         guard !isStarted || isGameOver else { return }
@@ -85,7 +84,7 @@ final class GameViewModel: ObservableObject {
 
         clearHover()
 
-        isGameOver = !canPlaceAnywhere(piece: currentPiece)
+        isGameOver = !canPlaceAnywhereConsideringRotation(piece: currentPiece)
         persistTopScoreIfNeeded()
     }
 
@@ -93,6 +92,19 @@ final class GameViewModel: ObservableObject {
         currentPiece = next1
         next1 = next2
         next2 = pieceBag.nextPiece()
+    }
+
+    // MARK: - Rotation
+
+    func rotateCurrentPieceCW() {
+        guard rotateEnabled else { return }
+        guard isStarted, !isGameOver, !isAnimatingClear else { return }
+
+        currentPiece = currentPiece.rotatedCW()
+        recalcHover()
+
+        hapticImpactLight()
+        soundClick()
     }
 
     // MARK: - Hover
@@ -110,9 +122,7 @@ final class GameViewModel: ObservableObject {
         helperCells = []
     }
 
-    func peekHoverOrigin() -> (row: Int, col: Int)? {
-        hoverOrigin
-    }
+    func peekHoverOrigin() -> (row: Int, col: Int)? { hoverOrigin }
 
     // MARK: - Commit
 
@@ -123,27 +133,28 @@ final class GameViewModel: ObservableObject {
 
         if canPlace(piece: currentPiece, originRow: origin.row, originCol: origin.col) {
 
-            // Place immediately (so we can detect full rows exactly)
             place(piece: currentPiece, originRow: origin.row, originCol: origin.col)
 
-            // Determine full rows after placement (for animation)
             let fullRows = currentFullRows()
-            if !fullRows.isEmpty {
-                isAnimatingClear = true
-                clearingCells = indicesForRows(fullRows)
+            let fullCols = clearColumnsEnabled ? currentFullColumns() : []
+            let anyClear = !fullRows.isEmpty || !fullCols.isEmpty
 
-                // keep helper off during clear
+            if anyClear {
+                isAnimatingClear = true
+                clearingCells = indicesForRows(fullRows).union(indicesForColumns(fullCols))
                 helperCells = []
 
-                // Flash duration then clear
+                soundClear()
+                hapticSuccess()
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
                     guard let self else { return }
 
-                    let cleared = self.board.clearFullRows()
-                    if cleared > 0 {
-                        // 1 vrstica = 10
-                        self.score += cleared * 10
-                    }
+                    let rowsCleared = self.clearFullRows(fullRows)
+                    let colsCleared = self.clearColumnsEnabled ? self.clearFullColumns(fullCols) : 0
+
+                    let clearedTotal = rowsCleared + colsCleared
+                    if clearedTotal > 0 { self.score += clearedTotal * 10 }
 
                     self.persistTopScoreIfNeeded()
 
@@ -153,31 +164,31 @@ final class GameViewModel: ObservableObject {
                     self.advanceQueue()
                     self.clearHover()
 
-                    self.isGameOver = !self.canPlaceAnywhere(piece: self.currentPiece)
-                    if self.isGameOver {
-                        self.persistTopScoreIfNeeded()
-                    }
+                    self.isGameOver = !self.canPlaceAnywhereConsideringRotation(piece: self.currentPiece)
+                    if self.isGameOver { self.persistTopScoreIfNeeded() }
                 }
 
                 return true
             } else {
-                // no rows cleared -> proceed normally
+                soundPlace()
+                hapticImpactMedium()
+
                 persistTopScoreIfNeeded()
                 advanceQueue()
                 clearHover()
 
-                isGameOver = !canPlaceAnywhere(piece: currentPiece)
+                isGameOver = !canPlaceAnywhereConsideringRotation(piece: currentPiece)
                 if isGameOver { persistTopScoreIfNeeded() }
 
                 return true
             }
         } else {
+            soundError()
+            hapticError()
             clearHover()
             return false
         }
     }
-
-    // MARK: - Top score persistence
 
     private func persistTopScoreIfNeeded() {
         if score > topScore {
@@ -185,8 +196,6 @@ final class GameViewModel: ObservableObject {
             UserDefaults.standard.set(topScore, forKey: topScoreKey)
         }
     }
-
-    // MARK: - Internals
 
     private func recalcHover() {
         guard let origin = hoverOrigin else {
@@ -211,50 +220,91 @@ final class GameViewModel: ObservableObject {
         hoverCells = indices
         hoverIsValid = valid && absCells.allSatisfy { board.isInside(row: $0.0, col: $0.1) }
 
-        // Helper: if hover valid, show which rows would clear (yellow)
-        if hoverIsValid {
-            helperCells = helperCellsForPotentialClear(withHoverIndices: indices)
-        } else {
-            helperCells = []
-        }
+        helperCells = hoverIsValid ? helperCellsForPotentialClear(withHoverIndices: indices) : []
     }
 
     private func helperCellsForPotentialClear(withHoverIndices hover: Set<Int>) -> Set<Int> {
-        var rowsToHighlight: [Int] = []
+        var lines = Set<Int>()
 
         for row in 0..<Board.size {
             var full = true
             for col in 0..<Board.size {
                 let idx = board.index(row: row, col: col)
-                let occupiedAfter = board.cells[idx] || hover.contains(idx)
-                if !occupiedAfter { full = false; break }
+                if !(board.cells[idx] || hover.contains(idx)) { full = false; break }
             }
-            if full { rowsToHighlight.append(row) }
+            if full {
+                for col in 0..<Board.size { lines.insert(board.index(row: row, col: col)) }
+            }
         }
 
-        guard !rowsToHighlight.isEmpty else { return [] }
-        return indicesForRows(rowsToHighlight)
+        if clearColumnsEnabled {
+            for col in 0..<Board.size {
+                var full = true
+                for row in 0..<Board.size {
+                    let idx = board.index(row: row, col: col)
+                    if !(board.cells[idx] || hover.contains(idx)) { full = false; break }
+                }
+                if full {
+                    for row in 0..<Board.size { lines.insert(board.index(row: row, col: col)) }
+                }
+            }
+        }
+
+        return lines
     }
 
     private func currentFullRows() -> [Int] {
         var rows: [Int] = []
         for row in 0..<Board.size {
-            let full = (0..<Board.size).allSatisfy { col in
-                board.isOccupied(row: row, col: col)
-            }
+            let full = (0..<Board.size).allSatisfy { col in board.isOccupied(row: row, col: col) }
             if full { rows.append(row) }
         }
         return rows
     }
 
+    private func currentFullColumns() -> [Int] {
+        var cols: [Int] = []
+        for col in 0..<Board.size {
+            let full = (0..<Board.size).allSatisfy { row in board.isOccupied(row: row, col: col) }
+            if full { cols.append(col) }
+        }
+        return cols
+    }
+
     private func indicesForRows(_ rows: [Int]) -> Set<Int> {
         var set: Set<Int> = []
         for row in rows {
-            for col in 0..<Board.size {
-                set.insert(board.index(row: row, col: col))
-            }
+            for col in 0..<Board.size { set.insert(board.index(row: row, col: col)) }
         }
         return set
+    }
+
+    private func indicesForColumns(_ cols: [Int]) -> Set<Int> {
+        var set: Set<Int> = []
+        for col in cols {
+            for row in 0..<Board.size { set.insert(board.index(row: row, col: col)) }
+        }
+        return set
+    }
+
+    private func clearFullRows(_ rows: [Int]) -> Int {
+        guard !rows.isEmpty else { return 0 }
+        for row in rows {
+            for col in 0..<Board.size {
+                board.setOccupied(row: row, col: col, value: false)
+            }
+        }
+        return rows.count
+    }
+
+    private func clearFullColumns(_ cols: [Int]) -> Int {
+        guard !cols.isEmpty else { return 0 }
+        for col in cols {
+            for row in 0..<Board.size {
+                board.setOccupied(row: row, col: col, value: false)
+            }
+        }
+        return cols.count
     }
 
     private func absoluteCells(of piece: Piece, originRow: Int, originCol: Int) -> [(Int, Int)] {
@@ -283,5 +333,65 @@ final class GameViewModel: ObservableObject {
         }
         return false
     }
+
+    // ✅ KEY FIX (game over when rotate ON)
+    private func canPlaceAnywhereConsideringRotation(piece: Piece) -> Bool {
+        if !rotateEnabled { return canPlaceAnywhere(piece: piece) }
+        for p in piece.uniqueRotationsCW() {
+            if canPlaceAnywhere(piece: p) { return true }
+        }
+        return false
+    }
+
+    // MARK: - Feedback
+
+    private func soundClick() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1104) }
+    private func soundPlace() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1105) }
+    private func soundClear() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1114) }
+    private func soundError() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1053) }
+
+    private func hapticImpactLight() { guard hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    private func hapticImpactMedium() { guard hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+    private func hapticSuccess() { guard hapticsEnabled else { return }; UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    private func hapticError() { guard hapticsEnabled else { return }; UINotificationFeedbackGenerator().notificationOccurred(.error) }
 }
 
+// MARK: - Piece rotation helpers (model untouched)
+
+private extension Piece {
+
+    func rotatedCW() -> Piece {
+        let maxRow = cells.map(\.row).max() ?? 0
+        let rotated = cells.map { (row: $0.col, col: maxRow - $0.row) }
+
+        let minRow = rotated.map(\.row).min() ?? 0
+        let minCol = rotated.map(\.col).min() ?? 0
+        let normalized = rotated.map { (row: $0.row - minRow, col: $0.col - minCol) }
+
+        return Piece(cells: normalized)
+    }
+
+    func normalizedKey() -> String {
+        let minRow = cells.map(\.row).min() ?? 0
+        let minCol = cells.map(\.col).min() ?? 0
+        let norm = cells.map { (r: $0.row - minRow, c: $0.col - minCol) }
+            .sorted { ($0.r, $0.c) < ($1.r, $1.c) }
+        return norm.map { "\($0.r),\($0.c)" }.joined(separator: "|")
+    }
+
+    func uniqueRotationsCW() -> [Piece] {
+        var out: [Piece] = []
+        var seen: Set<String> = []
+        var p: Piece = self
+
+        for _ in 0..<4 {
+            let key = p.normalizedKey()
+            if !seen.contains(key) {
+                seen.insert(key)
+                out.append(p)
+            }
+            p = p.rotatedCW()
+        }
+        return out
+    }
+}

@@ -9,10 +9,22 @@ import SwiftUI
 
 @main
 struct TetrixPuzzleApp: App {
+    @State private var started: Bool = false
+
     var body: some Scene {
         WindowGroup {
-            GameView()
-                .preferredColorScheme(.light) // <-- always light mode
+            Group {
+                if started {
+                    GameView(onHome: {
+                        started = false
+                    })
+                } else {
+                    WelcomeView {
+                        started = true
+                    }
+                }
+            }
+            .preferredColorScheme(.light) // always light mode
         }
     }
 }
