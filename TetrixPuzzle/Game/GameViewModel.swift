@@ -347,7 +347,7 @@ final class GameViewModel: ObservableObject {
 
     private func soundClick() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1104) }
     private func soundPlace() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1105) }
-    private func soundClear() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1114) }
+    private func soundClear() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1111) }
     private func soundError() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1053) }
 
     private func hapticImpactLight() { guard hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred() }

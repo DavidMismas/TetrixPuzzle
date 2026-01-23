@@ -4,7 +4,6 @@
 //
 //  Created by David Mišmaš on 20. 1. 26.
 //
-
 import SwiftUI
 
 struct GameView: View {
@@ -28,11 +27,11 @@ struct GameView: View {
 
     @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
 
-    private let bottomGapPx: CGFloat = 100
+    private let bottomGapPx: CGFloat = 140
     private let freeOffsetPx = CGSize(width: -2, height: -2)
     private let ghostSpacing: CGFloat = 1
 
-    private let boardTopExtra: CGFloat = 20
+    private let boardTopExtra: CGFloat = 24
 
     private let currentCellSize: CGFloat = 24
     private let currentSpacing: CGFloat = 1
@@ -151,8 +150,8 @@ struct GameView: View {
                     boardCell: boardCell,
                     boardSize: Board.size,
                     // light theme particle (still visible on white)
-                    particleColor: Color.blue.opacity(0.80),
-                    particlesPerCell: 4
+                    particleColor: Color.orange.opacity(0.80),
+                    particlesPerCell: 8
                 )
                 .id(shatterToken)
                 .allowsHitTesting(false)
@@ -513,7 +512,7 @@ struct GameView: View {
                         let dxCells = (fingerAnchorGlobal.x - stickyCenterGlobal.x) / boardCell
                         let dyCells = (fingerAnchorGlobal.y - stickyCenterGlobal.y) / boardCell
 
-                        let maxC: CGFloat = 0.5
+                        let maxC: CGFloat = 0.4
                         grabOffsetCells = CGSize(
                             width: max(-maxC, min(maxC, dxCells)),
                             height: max(-maxC, min(maxC, dyCells))
