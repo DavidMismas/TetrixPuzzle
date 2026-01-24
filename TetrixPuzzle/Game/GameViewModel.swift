@@ -40,6 +40,7 @@ final class GameViewModel: ObservableObject {
     private var hoverOrigin: (row: Int, col: Int)? = nil
 
     @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
+    @AppStorage("tetrispuzzle.setting.rotateClockwise") private var rotateClockwise: Bool = true
     @AppStorage("tetrispuzzle.setting.clearColumnsEnabled") private var clearColumnsEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.soundsEnabled") private var soundsEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.hapticsEnabled") private var hapticsEnabled: Bool = true
@@ -100,7 +101,7 @@ final class GameViewModel: ObservableObject {
         guard rotateEnabled else { return }
         guard isStarted, !isGameOver, !isAnimatingClear else { return }
 
-        currentPiece = currentPiece.rotatedCW()
+        currentPiece = rotateClockwise ? currentPiece.rotatedCW() : currentPiece.rotatedCCW()
         recalcHover()
 
         hapticImpactLight()
@@ -363,6 +364,17 @@ private extension Piece {
     func rotatedCW() -> Piece {
         let maxRow = cells.map(\.row).max() ?? 0
         let rotated = cells.map { (row: $0.col, col: maxRow - $0.row) }
+
+        let minRow = rotated.map(\.row).min() ?? 0
+        let minCol = rotated.map(\.col).min() ?? 0
+        let normalized = rotated.map { (row: $0.row - minRow, col: $0.col - minCol) }
+
+        return Piece(cells: normalized)
+    }
+
+    func rotatedCCW() -> Piece {
+        let maxCol = cells.map(\.col).max() ?? 0
+        let rotated = cells.map { (row: maxCol - $0.col, col: $0.row) }
 
         let minRow = rotated.map(\.row).min() ?? 0
         let minCol = rotated.map(\.col).min() ?? 0

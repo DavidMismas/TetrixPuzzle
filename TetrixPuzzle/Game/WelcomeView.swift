@@ -50,6 +50,7 @@ struct WelcomeView: View {
 
     // ✅ Persisted settings
     @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
+    @AppStorage("tetrispuzzle.setting.rotateClockwise") private var rotateClockwise: Bool = true
     @AppStorage("tetrispuzzle.setting.clearColumnsEnabled") private var clearColumnsEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.soundsEnabled") private var soundsEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.hapticsEnabled") private var hapticsEnabled: Bool = true
@@ -139,6 +140,19 @@ struct WelcomeView: View {
                 Toggle("", isOn: $rotateEnabled)
                     .labelsHidden()
                     .toggleStyle(GlowToggleStyle(onColor: .blue))
+            }
+
+            Divider().background(Color.black.opacity(0.08))
+
+            settingRow(
+                title: "Rotate direction",
+                subtitle: rotateClockwise ? "Clockwise" : "Counter-clockwise"
+            ) {
+                Toggle("", isOn: $rotateClockwise)
+                    .labelsHidden()
+                    .toggleStyle(GlowToggleStyle(onColor: .indigo))
+                    .disabled(!rotateEnabled)
+                    .opacity(rotateEnabled ? 1.0 : 0.35)
             }
 
             Divider().background(Color.black.opacity(0.08))

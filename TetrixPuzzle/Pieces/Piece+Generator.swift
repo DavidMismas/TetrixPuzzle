@@ -10,7 +10,7 @@ import Foundation
 // MARK: - Base Shapes
 
 enum BaseShape: CaseIterable {
-    case I, O, T, L, S
+    case I, O, T, L, J, S, Z
 }
 
 struct OrientedShape {
@@ -29,21 +29,33 @@ extension BaseShape {
             return [(0,0),(0,1),(1,0),(1,1)]
         case .T:
             return [(0,1),(1,0),(1,1),(1,2)]
+
+        // L: stolpec 3 + “noga” desno spodaj
         case .L:
             return [(0,0),(1,0),(2,0),(2,1)]
+
+        // J: stolpec 3 + “noga” levo spodaj (mirror od L)
+        case .J:
+            return [(0,1),(1,1),(2,1),(2,0)]
+
+        // S
         case .S:
             return [(0,1),(0,2),(1,0),(1,1)]
+
+        // Z (mirror od S)
+        case .Z:
+            return [(0,0),(0,1),(1,1),(1,2)]
         }
     }
 
-    /// Dovoljene rotacije (da dobimo 13 unikatnih)
+    /// Dovoljene rotacije (unikatne rotacije na obliko)
     var allowedRotations: [Int] {
         switch self {
         case .O:
             return [0]
-        case .I, .S:
+        case .I, .S, .Z:
             return [0, 1]
-        case .T, .L:
+        case .T, .L, .J:
             return [0, 1, 2, 3]
         }
     }
@@ -81,6 +93,8 @@ extension Piece {
     }
 }
 
+// MARK: - Seeded RNG (stable shuffle)
+
 struct SeededGenerator: RandomNumberGenerator {
     private var state: UInt64
 
@@ -96,6 +110,8 @@ struct SeededGenerator: RandomNumberGenerator {
         return state &* 2685821657736338717
     }
 }
+
+// MARK: - Piece Bag (13/19-shape orientation bag)
 
 final class PieceBag {
 
@@ -133,5 +149,3 @@ final class PieceBag {
         print("NEW BAG:", bag.map { "\($0.base)-\($0.rotation)" }.joined(separator: ", "))
     }
 }
-
-
