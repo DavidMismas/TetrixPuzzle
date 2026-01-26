@@ -4,6 +4,7 @@
 //
 //  Created by David Mišmaš on 20. 1. 26.
 //
+// GameView.swift
 import SwiftUI
 
 struct GameView: View {

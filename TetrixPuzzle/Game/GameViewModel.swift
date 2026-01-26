@@ -5,6 +5,7 @@
 //  Created by David Mišmaš on 20. 1. 26.
 //
 
+// GameViewModel.swift
 import Foundation
 import Combine
 import SwiftUI
@@ -26,8 +27,9 @@ final class GameViewModel: ObservableObject {
     @Published var isGameOver: Bool = false
     @Published var isStarted: Bool = false
 
+    // ✅ Top score per settings-combination (mode)
     @Published private(set) var topScore: Int = 0
-    private let topScoreKey = "tetrispuzzle.topScore"
+    private let topScoreBaseKey = "tetrispuzzle.topScore.mode."
 
     @Published var hoverCells: Set<Int> = []
     @Published var hoverIsValid: Bool = false
@@ -39,6 +41,8 @@ final class GameViewModel: ObservableObject {
 
     private var hoverOrigin: (row: Int, col: Int)? = nil
 
+    @AppStorage("isProUnlocked") private var isProUnlocked: Bool = false
+
     @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.rotateClockwise") private var rotateClockwise: Bool = true
     @AppStorage("tetrispuzzle.setting.clearColumnsEnabled") private var clearColumnsEnabled: Bool = true
@@ -46,7 +50,8 @@ final class GameViewModel: ObservableObject {
     @AppStorage("tetrispuzzle.setting.hapticsEnabled") private var hapticsEnabled: Bool = true
 
     init() {
-        topScore = UserDefaults.standard.integer(forKey: topScoreKey)
+        // ✅ load top score for CURRENT mode
+        topScore = UserDefaults.standard.integer(forKey: currentTopScoreKey())
 
         pieceBag.reset()
         currentPiece = pieceBag.nextPiece()
@@ -71,6 +76,9 @@ final class GameViewModel: ObservableObject {
     }
 
     private func startNewGameInternal() {
+        // ✅ ensure topScore matches current mode (in case Pro/settings changed)
+        refreshTopScoreForCurrentMode()
+
         board = Board()
         score = 0
         isGameOver = false
@@ -98,6 +106,7 @@ final class GameViewModel: ObservableObject {
     // MARK: - Rotation
 
     func rotateCurrentPieceCW() {
+        guard isProUnlocked else { return }
         guard rotateEnabled else { return }
         guard isStarted, !isGameOver, !isAnimatingClear else { return }
 
@@ -137,7 +146,7 @@ final class GameViewModel: ObservableObject {
             place(piece: currentPiece, originRow: origin.row, originCol: origin.col)
 
             let fullRows = currentFullRows()
-            let fullCols = clearColumnsEnabled ? currentFullColumns() : []
+            let fullCols = (isProUnlocked && clearColumnsEnabled) ? currentFullColumns() : []
             let anyClear = !fullRows.isEmpty || !fullCols.isEmpty
 
             if anyClear {
@@ -152,7 +161,7 @@ final class GameViewModel: ObservableObject {
                     guard let self else { return }
 
                     let rowsCleared = self.clearFullRows(fullRows)
-                    let colsCleared = self.clearColumnsEnabled ? self.clearFullColumns(fullCols) : 0
+                    let colsCleared = (self.isProUnlocked && self.clearColumnsEnabled) ? self.clearFullColumns(fullCols) : 0
 
                     let clearedTotal = rowsCleared + colsCleared
                     if clearedTotal > 0 { self.score += clearedTotal * 10 }
@@ -191,10 +200,39 @@ final class GameViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Top score per mode
+
+    private func currentTopScoreKey() -> String {
+        // FREE users: always the same "mode"
+        // (so they don't generate multiple keys for settings they can't actually use)
+        let pro = isProUnlocked
+
+        let re = pro ? (rotateEnabled ? 1 : 0) : 0
+        let rd = pro ? (rotateClockwise ? 1 : 0) : 1  // keep stable
+        let cc = pro ? (clearColumnsEnabled ? 1 : 0) : 0
+        let so = pro ? (soundsEnabled ? 1 : 0) : 0
+        let ha = pro ? (hapticsEnabled ? 1 : 0) : 0
+        let pr = pro ? 1 : 0
+
+        // compact, stable key
+        let suffix = "P\(pr)_R\(re)_D\(rd)_C\(cc)_S\(so)_H\(ha)"
+        return topScoreBaseKey + suffix
+    }
+
+    private func refreshTopScoreForCurrentMode() {
+        topScore = UserDefaults.standard.integer(forKey: currentTopScoreKey())
+    }
+
     private func persistTopScoreIfNeeded() {
+        // ensure we're comparing to correct mode topScore
+        // (cheap + safe)
+        let key = currentTopScoreKey()
+        let existing = UserDefaults.standard.integer(forKey: key)
+        if existing != topScore { topScore = existing }
+
         if score > topScore {
             topScore = score
-            UserDefaults.standard.set(topScore, forKey: topScoreKey)
+            UserDefaults.standard.set(topScore, forKey: key)
         }
     }
 
@@ -238,7 +276,7 @@ final class GameViewModel: ObservableObject {
             }
         }
 
-        if clearColumnsEnabled {
+        if isProUnlocked && clearColumnsEnabled {
             for col in 0..<Board.size {
                 var full = true
                 for row in 0..<Board.size {
@@ -335,9 +373,9 @@ final class GameViewModel: ObservableObject {
         return false
     }
 
-    // ✅ KEY FIX (game over when rotate ON)
     private func canPlaceAnywhereConsideringRotation(piece: Piece) -> Bool {
-        if !rotateEnabled { return canPlaceAnywhere(piece: piece) }
+        // rotation is Pro-only: if not Pro or rotate disabled -> treat as no-rotate
+        if !isProUnlocked || !rotateEnabled { return canPlaceAnywhere(piece: piece) }
         for p in piece.uniqueRotationsCW() {
             if canPlaceAnywhere(piece: p) { return true }
         }
@@ -346,15 +384,15 @@ final class GameViewModel: ObservableObject {
 
     // MARK: - Feedback
 
-    private func soundClick() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1104) }
-    private func soundPlace() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1105) }
-    private func soundClear() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1111) }
-    private func soundError() { guard soundsEnabled else { return }; AudioServicesPlaySystemSound(1053) }
+    private func soundClick() { guard isProUnlocked, soundsEnabled else { return }; AudioServicesPlaySystemSound(1104) }
+    private func soundPlace() { guard isProUnlocked, soundsEnabled else { return }; AudioServicesPlaySystemSound(1105) }
+    private func soundClear() { guard isProUnlocked, soundsEnabled else { return }; AudioServicesPlaySystemSound(1111) }
+    private func soundError() { guard isProUnlocked, soundsEnabled else { return }; AudioServicesPlaySystemSound(1053) }
 
-    private func hapticImpactLight() { guard hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-    private func hapticImpactMedium() { guard hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-    private func hapticSuccess() { guard hapticsEnabled else { return }; UINotificationFeedbackGenerator().notificationOccurred(.success) }
-    private func hapticError() { guard hapticsEnabled else { return }; UINotificationFeedbackGenerator().notificationOccurred(.error) }
+    private func hapticImpactLight() { guard isProUnlocked, hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    private func hapticImpactMedium() { guard isProUnlocked, hapticsEnabled else { return }; UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+    private func hapticSuccess() { guard isProUnlocked, hapticsEnabled else { return }; UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    private func hapticError() { guard isProUnlocked, hapticsEnabled else { return }; UINotificationFeedbackGenerator().notificationOccurred(.error) }
 }
 
 // MARK: - Piece rotation helpers (model untouched)

@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct TetrixPuzzleApp: App {
     @State private var started: Bool = false
+    @StateObject private var entitlements = Entitlements()
 
     var body: some Scene {
         WindowGroup {
@@ -24,7 +25,11 @@ struct TetrixPuzzleApp: App {
                     }
                 }
             }
-            .preferredColorScheme(.light) // always light mode
+            .environmentObject(entitlements)
+            .preferredColorScheme(.light)
+            .onAppear {
+                entitlements.start()
+            }
         }
     }
 }

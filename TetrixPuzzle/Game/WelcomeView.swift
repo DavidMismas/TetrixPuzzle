@@ -48,6 +48,8 @@ private struct GlowToggleStyle: ToggleStyle {
 
 struct WelcomeView: View {
 
+    @EnvironmentObject private var entitlements: Entitlements
+
     // ✅ Persisted settings
     @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.rotateClockwise") private var rotateClockwise: Bool = true
@@ -55,7 +57,11 @@ struct WelcomeView: View {
     @AppStorage("tetrispuzzle.setting.soundsEnabled") private var soundsEnabled: Bool = true
     @AppStorage("tetrispuzzle.setting.hapticsEnabled") private var hapticsEnabled: Bool = true
 
+    @State private var showPaywall: Bool = false
+
     let onStart: () -> Void
+
+    private var isPro: Bool { entitlements.isPro }
 
     var body: some View {
         ZStack {
@@ -71,6 +77,21 @@ struct WelcomeView: View {
             .padding(.top, 28)
             .padding(.bottom, 18)
         }
+        .onAppear { enforceFreeDefaultsIfNeeded() }
+        .onChange(of: entitlements.isPro) { _, _ in enforceFreeDefaultsIfNeeded() }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .environmentObject(entitlements)
+        }
+    }
+
+    private func enforceFreeDefaultsIfNeeded() {
+        guard !isPro else { return }
+        rotateEnabled = false
+        clearColumnsEnabled = false
+        soundsEnabled = false
+        hapticsEnabled = false
+        // rotateClockwise can stay; rotation itself is locked anyway
     }
 
     // MARK: - Background (light, more pronounced)
@@ -135,57 +156,80 @@ struct WelcomeView: View {
 
             settingRow(
                 title: "Rotation",
-                subtitle: "Allow rotating the current piece"
+                subtitle: isPro ? "Allow rotating the current piece" : "Pro only"
             ) {
-                Toggle("", isOn: $rotateEnabled)
-                    .labelsHidden()
-                    .toggleStyle(GlowToggleStyle(onColor: .blue))
+                gatedToggle(isOn: $rotateEnabled, onColor: .blue)
             }
 
             Divider().background(Color.black.opacity(0.08))
 
             settingRow(
                 title: "Rotate direction",
-                subtitle: rotateClockwise ? "Clockwise" : "Counter-clockwise"
+                subtitle: isPro ? (rotateClockwise ? "Clockwise" : "Counter-clockwise") : "Pro only"
             ) {
-                Toggle("", isOn: $rotateClockwise)
-                    .labelsHidden()
-                    .toggleStyle(GlowToggleStyle(onColor: .indigo))
-                    .disabled(!rotateEnabled)
-                    .opacity(rotateEnabled ? 1.0 : 0.35)
+                gatedToggle(isOn: $rotateClockwise, onColor: .indigo)
+                    .disabled(!isPro || !rotateEnabled)
+                    .opacity((isPro && rotateEnabled) ? 1.0 : 0.35)
+                    .onTapGesture {
+                        if !isPro { showPaywall = true }
+                    }
             }
 
             Divider().background(Color.black.opacity(0.08))
 
             settingRow(
                 title: "Clear columns",
-                subtitle: "Clear vertical lines too"
+                subtitle: isPro ? "Clear vertical lines too" : "Pro only"
             ) {
-                Toggle("", isOn: $clearColumnsEnabled)
-                    .labelsHidden()
-                    .toggleStyle(GlowToggleStyle(onColor: .teal))
+                gatedToggle(isOn: $clearColumnsEnabled, onColor: .teal)
             }
 
             Divider().background(Color.black.opacity(0.08))
 
             settingRow(
                 title: "Sounds",
-                subtitle: "Placement + clear sounds"
+                subtitle: isPro ? "Placement + clear sounds" : "Pro only"
             ) {
-                Toggle("", isOn: $soundsEnabled)
-                    .labelsHidden()
-                    .toggleStyle(GlowToggleStyle(onColor: .orange))
+                gatedToggle(isOn: $soundsEnabled, onColor: .orange)
             }
 
             Divider().background(Color.black.opacity(0.08))
 
             settingRow(
                 title: "Haptics",
-                subtitle: "Vibration feedback"
+                subtitle: isPro ? "Vibration feedback" : "Pro only"
             ) {
-                Toggle("", isOn: $hapticsEnabled)
-                    .labelsHidden()
-                    .toggleStyle(GlowToggleStyle(onColor: .pink))
+                gatedToggle(isOn: $hapticsEnabled, onColor: .pink)
+            }
+
+            if !isPro {
+                Divider().background(Color.black.opacity(0.08))
+
+                Button {
+                    showPaywall = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "lock.open")
+                        Text("Unlock Pro")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        Spacer()
+                        Text(entitlements.proPrice ?? "€1.99")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.black.opacity(0.85))
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.80))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                            )
+                    )
+                    .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 7)
+                }
+                .buttonStyle(.plain)
             }
 
         }
@@ -200,6 +244,25 @@ struct WelcomeView: View {
         )
         .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 10)
         .padding(.top, 12)
+    }
+
+    /// ✅ TUKAJ je točno kje je `showPaywall = true`
+    private func gatedToggle(isOn: Binding<Bool>, onColor: Color) -> some View {
+        Toggle("", isOn: Binding(
+            get: { isOn.wrappedValue },
+            set: { newValue in
+                if isPro {
+                    isOn.wrappedValue = newValue
+                } else {
+                    // user tried to enable -> show paywall
+                    showPaywall = true
+                }
+            }
+        ))
+        .labelsHidden()
+        .toggleStyle(GlowToggleStyle(onColor: onColor))
+        .disabled(!isPro)
+        .opacity(isPro ? 1.0 : 0.55)
     }
 
     private func settingRow<Accessory: View>(
@@ -265,4 +328,5 @@ struct WelcomeView: View {
 
 #Preview {
     WelcomeView(onStart: {})
+        .environmentObject(Entitlements())
 }
