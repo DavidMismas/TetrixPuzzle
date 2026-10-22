@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct GameView: View {
+    let startFresh: Bool
     let onHome: () -> Void
 
     @StateObject private var vm = GameViewModel()
@@ -25,6 +26,8 @@ struct GameView: View {
     // ✅ shatter snapshot + token to force overlay rebuild every clear
     @State private var shatterCells: Set<Int> = []
     @State private var shatterToken: UUID = UUID()
+    @State private var showRestartConfirmation = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @AppStorage("tetrispuzzle.setting.rotateEnabled") private var rotateEnabled: Bool = true
 
@@ -68,69 +71,21 @@ struct GameView: View {
     // MARK: - Theme (from WelcomeView)
 
     private var background: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color.white,
-                    Color(red: 0.92, green: 0.97, blue: 1.00),   // very light blue
-                    Color(red: 0.96, green: 0.94, blue: 1.00)    // very light purple
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            RadialGradient(
-                colors: [
-                    Color.cyan.opacity(0.18),
-                    Color.clear
-                ],
-                center: .topLeading,
-                startRadius: 20,
-                endRadius: 460
-            )
-            .ignoresSafeArea()
-
-            RadialGradient(
-                colors: [
-                    Color.purple.opacity(0.14),
-                    Color.clear
-                ],
-                center: .bottomTrailing,
-                startRadius: 20,
-                endRadius: 520
-            )
-            .ignoresSafeArea()
-        }
+        GameColors.background.ignoresSafeArea()
     }
 
     private func glassCard(corner: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: corner, style: .continuous)
-            .fill(Color.white.opacity(0.86))
+            .fill(GameColors.surface)
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(GameColors.border, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 10)
     }
 
     private func primaryGradientButtonBackground(corner: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: corner, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color.blue.opacity(0.95),
-                        Color.purple.opacity(0.90)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 10)
+            .fill(GameColors.filled)
     }
 
     var body: some View {
@@ -142,7 +97,7 @@ struct GameView: View {
 
         // ✅ Shatter overlay ABOVE board (and not clipped)
         .overlay {
-            if !shatterCells.isEmpty,
+            if !reduceMotion, !shatterCells.isEmpty,
                boardRectGlobal != .zero,
                boardCell > 2 {
                 ClearShatterOverlay(
@@ -151,8 +106,8 @@ struct GameView: View {
                     boardCell: boardCell,
                     boardSize: Board.size,
                     // light theme particle (still visible on white)
-                    particleColor: Color.orange.opacity(0.80),
-                    particlesPerCell: 8
+                    particleColor: GameColors.helperRow,
+                    particlesPerCell: 4
                 )
                 .id(shatterToken)
                 .allowsHitTesting(false)
@@ -175,7 +130,12 @@ struct GameView: View {
             rootRectGlobal = rect
         }
         .onAppear {
-            if !vm.isStarted { vm.start() }
+            if !vm.isStarted { vm.start(fresh: startFresh) }
+        }
+        .confirmationDialog("Start a new game?", isPresented: $showRestartConfirmation) {
+            Button("Restart game", role: .destructive) { vm.restart() }
+        } message: {
+            Text("Your current game will be replaced.")
         }
 
         .onChange(of: vm.clearingCells) { _, newValue in
@@ -202,17 +162,19 @@ struct GameView: View {
         }
         .font(.headline)
         .foregroundColor(Color.black.opacity(0.85))
+        .contentTransition(.numericText())
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: vm.score)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.88))
+                .fill(GameColors.surface)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(GameColors.border, lineWidth: 1)
                 )
         )
-        .shadow(color: .black.opacity(0.10), radius: 16, x: 0, y: 10)
+        .accessibilityElement(children: .combine)
         .padding(.horizontal, 10)
     }
 
@@ -230,8 +192,6 @@ struct GameView: View {
                 showGridHover: true,
                 onCellTap: { row, col in vm.updateHover(row: row, col: col) }
             )
-            .padding(.horizontal, 10)
-            .padding(.top, boardTopExtra)
             .overlay(
                 GeometryReader { proxy in
                     Color.clear
@@ -241,6 +201,9 @@ struct GameView: View {
             .onPreferenceChange(BoardRectGlobalKey.self) { rect in
                 boardRectGlobal = rect
             }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: vm.board.cells)
+            .padding(.horizontal, 10)
+            .padding(.top, boardTopExtra)
             .overlay {
                 if vm.isGameOver {
                     ZStack {
@@ -265,13 +228,12 @@ struct GameView: View {
                             .frame(width: cardWidth, height: cardHeight)
                             .background(
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color.white.opacity(0.92))
+                                    .fill(GameColors.surface)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                            .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                                            .stroke(GameColors.border, lineWidth: 1)
                                     )
                             )
-                            .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 12)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                             .scaleEffect(vm.isGameOver ? 1.0 : 0.85)
                             .opacity(vm.isGameOver ? 1.0 : 0.0)
@@ -302,6 +264,7 @@ struct GameView: View {
                     }
                     .frame(width: currentCardSize.width, height: currentCardSize.height, alignment: .center)
                     .background(glassCard(corner: 14))
+                    .accessibilityLabel("Current piece. Drag onto the board to place it.")
                     .contentShape(Rectangle())
                     .gesture(dragGestureGlobal)
 
@@ -316,13 +279,12 @@ struct GameView: View {
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.white.opacity(0.75))
+                                .fill(GameColors.surface)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                                        .stroke(GameColors.border, lineWidth: 1)
                                 )
                         )
-                        .shadow(color: .black.opacity(0.10), radius: 10, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .disabled(!rotateEnabled || !vm.isStarted || vm.isGameOver || vm.isAnimatingClear || isDragging)
@@ -331,6 +293,13 @@ struct GameView: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity)
+
+                Button("Place selected piece") { _ = vm.commitHover() }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(GameColors.filled)
+                    .disabled(!vm.hoverIsValid || vm.isAnimatingClear)
+                    .opacity(vm.hoverIsValid ? 1 : 0.45)
+                    .accessibilityHint("Tap an empty board cell to select a position first")
 
                 Text("Next")
                     .font(.headline)
@@ -376,10 +345,11 @@ struct GameView: View {
                         .background(glassCard(corner: 14))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Home. Your game is saved.")
                 .disabled(isDragging || vm.isAnimatingClear)
                 .opacity((isDragging || vm.isAnimatingClear) ? 0.6 : 1.0)
 
-                Button { vm.restart() } label: {
+                Button { showRestartConfirmation = true } label: {
                     Text("Restart")
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
@@ -388,6 +358,7 @@ struct GameView: View {
                         .background(primaryGradientButtonBackground(corner: 16))
                 }
                 .buttonStyle(.plain)
+                .accessibilityHint("Replaces the current game after confirmation")
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.bottom, 6)

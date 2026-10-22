@@ -13,6 +13,13 @@ struct Board {
     // 10x10 = 100 celic
     private(set) var cells: [Bool] = Array(repeating: false, count: size * size)
 
+    init() {}
+
+    init?(cells: [Bool]) {
+        guard cells.count == Self.size * Self.size else { return nil }
+        self.cells = cells
+    }
+
     func index(row: Int, col: Int) -> Int {
         row * Self.size + col
     }

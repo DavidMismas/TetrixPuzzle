@@ -10,17 +10,19 @@ import SwiftUI
 @main
 struct TetrixPuzzleApp: App {
     @State private var started: Bool = false
+    @State private var startFresh: Bool = false
     @StateObject private var entitlements = Entitlements()
 
     var body: some Scene {
         WindowGroup {
             Group {
                 if started {
-                    GameView(onHome: {
+                    GameView(startFresh: startFresh, onHome: {
                         started = false
                     })
                 } else {
-                    WelcomeView {
+                    WelcomeView { fresh in
+                        startFresh = fresh
                         started = true
                     }
                 }

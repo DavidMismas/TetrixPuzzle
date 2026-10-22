@@ -58,8 +58,9 @@ struct WelcomeView: View {
     @AppStorage("tetrispuzzle.setting.hapticsEnabled") private var hapticsEnabled: Bool = true
 
     @State private var showPaywall: Bool = false
+    @State private var showNewGameConfirmation = false
 
-    let onStart: () -> Void
+    let onStart: (Bool) -> Void
 
     private var isPro: Bool { entitlements.isPro }
 
@@ -67,21 +68,28 @@ struct WelcomeView: View {
         ZStack {
             background
 
-            VStack(spacing: 18) {
-                header
-                settingsCard
-                Spacer(minLength: 10)
-                startButton
+            ScrollView {
+                VStack(spacing: 18) {
+                    header
+                    howToCard
+                    settingsCard
+                    startButton
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 28)
+                .padding(.bottom, 24)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 28)
-            .padding(.bottom, 18)
         }
         .onAppear { enforceFreeDefaultsIfNeeded() }
         .onChange(of: entitlements.isPro) { _, _ in enforceFreeDefaultsIfNeeded() }
         .sheet(isPresented: $showPaywall) {
             PaywallView()
                 .environmentObject(entitlements)
+        }
+        .confirmationDialog("Start a new game?", isPresented: $showNewGameConfirmation) {
+            Button("New game", role: .destructive) { onStart(true) }
+        } message: {
+            Text("Your saved game will be replaced.")
         }
     }
 
@@ -97,56 +105,38 @@ struct WelcomeView: View {
     // MARK: - Background (light, more pronounced)
 
     private var background: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color.white,
-                    Color(red: 0.92, green: 0.97, blue: 1.00),   // very light blue
-                    Color(red: 0.96, green: 0.94, blue: 1.00)    // very light purple
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            // Soft glow blobs (gives contrast without dark theme)
-            RadialGradient(
-                colors: [
-                    Color.cyan.opacity(0.18),
-                    Color.clear
-                ],
-                center: .topLeading,
-                startRadius: 20,
-                endRadius: 460
-            )
-            .ignoresSafeArea()
-
-            RadialGradient(
-                colors: [
-                    Color.purple.opacity(0.14),
-                    Color.clear
-                ],
-                center: .bottomTrailing,
-                startRadius: 20,
-                endRadius: 520
-            )
-            .ignoresSafeArea()
-        }
+        GameColors.background.ignoresSafeArea()
     }
 
     // MARK: - Header
 
     private var header: some View {
         VStack(spacing: 8) {
-            Text("Tetris Puzzle")
+            Text("Tetromix")
                 .font(.system(size: 34, weight: .heavy, design: .rounded))
                 .foregroundStyle(Color.black.opacity(0.92))
 
-            Text("Quick settings before you start")
+            Text("A quiet place to play with shapes")
                 .font(.subheadline)
                 .foregroundStyle(Color.black.opacity(0.55))
         }
         .padding(.top, 6)
+    }
+
+    private var howToCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("How to play", systemImage: "hand.draw")
+                .font(.headline)
+            Text("Drag the current piece onto the board. Fill a horizontal line to clear it and earn points. Plan ahead with the next two pieces.")
+                .font(.subheadline)
+                .foregroundStyle(GameColors.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 18).fill(GameColors.surface))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(GameColors.border, lineWidth: 1))
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Settings card
@@ -158,7 +148,7 @@ struct WelcomeView: View {
                 title: "Rotation",
                 subtitle: isPro ? "Allow rotating the current piece" : "Pro only"
             ) {
-                gatedToggle(isOn: $rotateEnabled, onColor: .blue)
+                gatedToggle("Rotation", isOn: $rotateEnabled, onColor: .blue)
             }
 
             Divider().background(Color.black.opacity(0.08))
@@ -167,7 +157,7 @@ struct WelcomeView: View {
                 title: "Rotate direction",
                 subtitle: isPro ? (rotateClockwise ? "Clockwise" : "Counter-clockwise") : "Pro only"
             ) {
-                gatedToggle(isOn: $rotateClockwise, onColor: .indigo)
+                gatedToggle("Rotate direction", isOn: $rotateClockwise, onColor: .indigo)
                     .disabled(!isPro || !rotateEnabled)
                     .opacity((isPro && rotateEnabled) ? 1.0 : 0.35)
                     .onTapGesture {
@@ -181,7 +171,7 @@ struct WelcomeView: View {
                 title: "Clear columns",
                 subtitle: isPro ? "Clear vertical lines too" : "Pro only"
             ) {
-                gatedToggle(isOn: $clearColumnsEnabled, onColor: .teal)
+                gatedToggle("Clear columns", isOn: $clearColumnsEnabled, onColor: .teal)
             }
 
             Divider().background(Color.black.opacity(0.08))
@@ -190,7 +180,7 @@ struct WelcomeView: View {
                 title: "Sounds",
                 subtitle: isPro ? "Placement + clear sounds" : "Pro only"
             ) {
-                gatedToggle(isOn: $soundsEnabled, onColor: .orange)
+                gatedToggle("Sounds", isOn: $soundsEnabled, onColor: .orange)
             }
 
             Divider().background(Color.black.opacity(0.08))
@@ -199,7 +189,7 @@ struct WelcomeView: View {
                 title: "Haptics",
                 subtitle: isPro ? "Vibration feedback" : "Pro only"
             ) {
-                gatedToggle(isOn: $hapticsEnabled, onColor: .pink)
+                gatedToggle("Haptics", isOn: $hapticsEnabled, onColor: .pink)
             }
 
             if !isPro {
@@ -221,34 +211,26 @@ struct WelcomeView: View {
                     .padding(.horizontal, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.white.opacity(0.80))
+                            .fill(GameColors.background)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                                    .stroke(GameColors.border, lineWidth: 1)
                             )
                     )
-                    .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 7)
                 }
                 .buttonStyle(.plain)
             }
 
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.88))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                )
-        )
-        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 10)
+        .background(RoundedRectangle(cornerRadius: 18).fill(GameColors.surface))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(GameColors.border, lineWidth: 1))
         .padding(.top, 12)
     }
 
     /// ✅ TUKAJ je točno kje je `showPaywall = true`
-    private func gatedToggle(isOn: Binding<Bool>, onColor: Color) -> some View {
-        Toggle("", isOn: Binding(
+    private func gatedToggle(_ title: String, isOn: Binding<Bool>, onColor: Color) -> some View {
+        Toggle(title, isOn: Binding(
             get: { isOn.wrappedValue },
             set: { newValue in
                 if isPro {
@@ -290,43 +272,29 @@ struct WelcomeView: View {
     // MARK: - Start button
 
     private var startButton: some View {
-        Button {
-            onStart()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "play.fill")
-                    .font(.headline)
-                Text("Start Game")
+        VStack(spacing: 10) {
+            Button { onStart(!GameViewModel.hasSavedGame) } label: {
+                Label(GameViewModel.hasSavedGame ? "Continue game" : "Start game", systemImage: "play.fill")
                     .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(GameColors.filled))
             }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.blue.opacity(0.95),
-                                Color.purple.opacity(0.90)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 10)
+            .buttonStyle(.plain)
+
+            if GameViewModel.hasSavedGame {
+                Button("New game") { showNewGameConfirmation = true }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(GameColors.filled)
+                    .padding(.vertical, 8)
+            }
         }
-        .buttonStyle(.plain)
         .padding(.bottom, 6)
     }
 }
 
 #Preview {
-    WelcomeView(onStart: {})
+    WelcomeView(onStart: { _ in })
         .environmentObject(Entitlements())
 }

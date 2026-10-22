@@ -45,7 +45,6 @@ struct PieceView: View {
                 RoundedRectangle(cornerRadius: max(2, cellSize * 0.1), style: .continuous)
                     .fill(color)
                     .frame(width: cellSize, height: cellSize)
-                    .shadow(color: .black.opacity(0.1), radius: 0.2, x: 0, y: 1)
                     .offset(
                         x: CGFloat(cell.col) * (cellSize + spacing),
                         y: CGFloat(cell.row) * (cellSize + spacing)

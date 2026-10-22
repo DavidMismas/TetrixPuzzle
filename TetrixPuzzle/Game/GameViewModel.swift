@@ -15,6 +15,39 @@ import AudioToolbox
 @MainActor
 final class GameViewModel: ObservableObject {
 
+    private struct SavedPiece: Codable {
+        let rows: [Int]
+        let cols: [Int]
+
+        init(_ piece: Piece) {
+            rows = piece.cells.map(\.row)
+            cols = piece.cells.map(\.col)
+        }
+
+        var piece: Piece? {
+            guard rows.count == 4, cols.count == 4,
+                  rows.allSatisfy({ (0..<4).contains($0) }),
+                  cols.allSatisfy({ (0..<4).contains($0) }) else { return nil }
+            return Piece(cells: zip(rows, cols).map { (row: $0.0, col: $0.1) })
+        }
+    }
+
+    private struct SavedGame: Codable {
+        let cells: [Bool]
+        let score: Int
+        let current: SavedPiece
+        let next1: SavedPiece
+        let next2: SavedPiece
+        let bag: PieceBag.Snapshot
+        let rotateEnabled: Bool
+        let rotateClockwise: Bool
+        let clearColumnsEnabled: Bool
+        let isPro: Bool
+    }
+
+    private static let saveKey = "tetrispuzzle.savedGame.v1"
+    static var hasSavedGame: Bool { UserDefaults.standard.data(forKey: saveKey) != nil }
+
     private let pieceBag = PieceBag()
 
     @Published var board = Board()
@@ -64,9 +97,10 @@ final class GameViewModel: ObservableObject {
         isStarted = false
     }
 
-    func start() {
+    func start(fresh: Bool = false) {
         guard !isStarted || isGameOver else { return }
         isStarted = true
+        if !fresh && restoreGame() { return }
         startNewGameInternal()
     }
 
@@ -76,6 +110,7 @@ final class GameViewModel: ObservableObject {
     }
 
     private func startNewGameInternal() {
+        UserDefaults.standard.removeObject(forKey: Self.saveKey)
         // ✅ ensure topScore matches current mode (in case Pro/settings changed)
         refreshTopScoreForCurrentMode()
 
@@ -95,6 +130,7 @@ final class GameViewModel: ObservableObject {
 
         isGameOver = !canPlaceAnywhereConsideringRotation(piece: currentPiece)
         persistTopScoreIfNeeded()
+        saveGame()
     }
 
     func advanceQueue() {
@@ -112,6 +148,7 @@ final class GameViewModel: ObservableObject {
 
         currentPiece = rotateClockwise ? currentPiece.rotatedCW() : currentPiece.rotatedCCW()
         recalcHover()
+        saveGame()
 
         hapticImpactLight()
         soundClick()
@@ -176,6 +213,7 @@ final class GameViewModel: ObservableObject {
 
                     self.isGameOver = !self.canPlaceAnywhereConsideringRotation(piece: self.currentPiece)
                     if self.isGameOver { self.persistTopScoreIfNeeded() }
+                    self.saveGame()
                 }
 
                 return true
@@ -189,6 +227,7 @@ final class GameViewModel: ObservableObject {
 
                 isGameOver = !canPlaceAnywhereConsideringRotation(piece: currentPiece)
                 if isGameOver { persistTopScoreIfNeeded() }
+                saveGame()
 
                 return true
             }
@@ -208,19 +247,69 @@ final class GameViewModel: ObservableObject {
         let pro = isProUnlocked
 
         let re = pro ? (rotateEnabled ? 1 : 0) : 0
-        let rd = pro ? (rotateClockwise ? 1 : 0) : 1  // keep stable
         let cc = pro ? (clearColumnsEnabled ? 1 : 0) : 0
-        let so = pro ? (soundsEnabled ? 1 : 0) : 0
-        let ha = pro ? (hapticsEnabled ? 1 : 0) : 0
         let pr = pro ? 1 : 0
 
-        // compact, stable key
-        let suffix = "P\(pr)_R\(re)_D\(rd)_C\(cc)_S\(so)_H\(ha)"
+        let suffix = "P\(pr)_R\(re)_C\(cc)"
         return topScoreBaseKey + suffix
     }
 
     private func refreshTopScoreForCurrentMode() {
-        topScore = UserDefaults.standard.integer(forKey: currentTopScoreKey())
+        let key = currentTopScoreKey()
+        // Keep scores earned before the key stopped including feedback settings.
+        if !UserDefaults.standard.bool(forKey: "tetrispuzzle.scoresMigrated.v1") {
+            for (oldKey, value) in UserDefaults.standard.dictionaryRepresentation() {
+                guard oldKey.hasPrefix(topScoreBaseKey),
+                      let oldScore = value as? Int else { continue }
+                let parts = oldKey.replacingOccurrences(of: topScoreBaseKey, with: "").split(separator: "_")
+                guard let p = parts.first(where: { $0.hasPrefix("P") }),
+                      let r = parts.first(where: { $0.hasPrefix("R") }),
+                      let c = parts.first(where: { $0.hasPrefix("C") }) else { continue }
+                let newKey = topScoreBaseKey + "\(p)_\(r)_\(c)"
+                UserDefaults.standard.set(max(oldScore, UserDefaults.standard.integer(forKey: newKey)), forKey: newKey)
+            }
+            UserDefaults.standard.set(true, forKey: "tetrispuzzle.scoresMigrated.v1")
+        }
+        topScore = UserDefaults.standard.integer(forKey: key)
+    }
+
+    private func saveGame() {
+        guard isStarted, !isGameOver else {
+            UserDefaults.standard.removeObject(forKey: Self.saveKey)
+            return
+        }
+        let saved = SavedGame(cells: board.cells, score: score,
+                              current: SavedPiece(currentPiece), next1: SavedPiece(next1),
+                              next2: SavedPiece(next2), bag: pieceBag.snapshot(),
+                              rotateEnabled: rotateEnabled, rotateClockwise: rotateClockwise,
+                              clearColumnsEnabled: clearColumnsEnabled, isPro: isProUnlocked)
+        if let data = try? JSONEncoder().encode(saved) {
+            UserDefaults.standard.set(data, forKey: Self.saveKey)
+        }
+    }
+
+    private func restoreGame() -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: Self.saveKey),
+              let saved = try? JSONDecoder().decode(SavedGame.self, from: data),
+              let restoredBoard = Board(cells: saved.cells),
+              let current = saved.current.piece,
+              let upcoming1 = saved.next1.piece,
+              let upcoming2 = saved.next2.piece,
+              saved.score >= 0, saved.isPro == isProUnlocked else { return false }
+        rotateEnabled = saved.rotateEnabled
+        rotateClockwise = saved.rotateClockwise
+        clearColumnsEnabled = saved.clearColumnsEnabled
+        board = restoredBoard
+        score = saved.score
+        currentPiece = current
+        next1 = upcoming1
+        next2 = upcoming2
+        pieceBag.restore(saved.bag)
+        isGameOver = !canPlaceAnywhereConsideringRotation(piece: currentPiece)
+        clearHover()
+        refreshTopScoreForCurrentMode()
+        saveGame()
+        return true
     }
 
     private func persistTopScoreIfNeeded() {

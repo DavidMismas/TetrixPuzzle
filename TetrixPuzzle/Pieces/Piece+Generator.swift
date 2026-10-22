@@ -9,11 +9,11 @@ import Foundation
 
 // MARK: - Base Shapes
 
-enum BaseShape: CaseIterable {
+enum BaseShape: String, CaseIterable, Codable {
     case I, O, T, L, J, S, Z
 }
 
-struct OrientedShape {
+struct OrientedShape: Codable {
     let base: BaseShape
     let rotation: Int   // 0,1,2,3 (odvisno od oblike)
 }
@@ -95,7 +95,7 @@ extension Piece {
 
 // MARK: - Seeded RNG (stable shuffle)
 
-struct SeededGenerator: RandomNumberGenerator {
+struct SeededGenerator: RandomNumberGenerator, Codable {
     private var state: UInt64
 
     init(seed: UInt64) {
@@ -114,6 +114,11 @@ struct SeededGenerator: RandomNumberGenerator {
 // MARK: - Piece Bag (13/19-shape orientation bag)
 
 final class PieceBag {
+
+    struct Snapshot: Codable {
+        let bag: [OrientedShape]
+        let rng: SeededGenerator
+    }
 
     private var bag: [OrientedShape] = []
     private var rng: SeededGenerator
@@ -137,6 +142,13 @@ final class PieceBag {
         return Piece.make(base: oriented.base, rotation: oriented.rotation)
     }
 
+    func snapshot() -> Snapshot { Snapshot(bag: bag, rng: rng) }
+
+    func restore(_ snapshot: Snapshot) {
+        bag = snapshot.bag
+        rng = snapshot.rng
+    }
+
     private func refill() {
         bag = []
         for base in BaseShape.allCases {
@@ -146,6 +158,5 @@ final class PieceBag {
         }
         bag.shuffle(using: &rng)
 
-        print("NEW BAG:", bag.map { "\($0.base)-\($0.rotation)" }.joined(separator: ", "))
     }
 }
